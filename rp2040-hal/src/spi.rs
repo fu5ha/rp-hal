@@ -435,6 +435,12 @@ macro_rules! impl_write {
         #[cfg(feature = "eh1_0_alpha")]
         impl<D: SpiDevice, P: ValidSpiPinout<D>> eh1::SpiBus<$type> for Spi<Enabled, D, P, $nr> {
             fn read(&mut self, words: &mut [$type]) -> Result<(), Self::Error> {
+                // clear the rx fifo which may have been full/busy from a write
+                while self.is_readable() {
+                    let _ = self.device.sspdr.read().data().bits();
+                }
+
+
                 for word in words.iter_mut() {
                     // write empty word
                     while !self.is_writable() {}
@@ -457,14 +463,17 @@ macro_rules! impl_write {
                         .sspdr
                         .write(|w| unsafe { w.data().bits(*word as u16) });
 
-                    // drop read wordd
-                    while !self.is_readable() {}
-                    let _ = self.device.sspdr.read().data().bits();
                 }
+
                 Ok(())
             }
 
             fn transfer(&mut self, read: &mut [$type], write: &[$type]) -> Result<(), Self::Error>{
+                // clear the rx fifo which may have been full/busy from a write
+                while self.is_readable() {
+                    let _ = self.device.sspdr.read().data().bits();
+                }
+
                 let len = read.len().max(write.len());
                 for i in 0..len {
                     // write one word. Send empty word if buffer is empty.
@@ -486,6 +495,11 @@ macro_rules! impl_write {
             }
 
             fn transfer_in_place(&mut self, words: &mut [$type]) -> Result<(), Self::Error>{
+                // clear the rx fifo which may have been full/busy from a write
+                while self.is_readable() {
+                    let _ = self.device.sspdr.read().data().bits();
+                }
+
                 for word in words.iter_mut() {
                     // write one word
                     while !self.is_writable() {}
@@ -502,6 +516,9 @@ macro_rules! impl_write {
             }
 
             fn flush(&mut self) -> Result<(), Self::Error> {
+                while self.is_readable() {
+                    let _ = self.device.sspdr.read().data().bits();
+                }
                 while self.is_busy() {}
                 Ok(())
             }
