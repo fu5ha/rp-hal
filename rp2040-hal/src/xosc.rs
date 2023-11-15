@@ -1,7 +1,6 @@
 //! Crystal Oscillator (XOSC)
 // See [Chapter 2 Section 16](https://datasheets.raspberrypi.org/rp2040/rp2040_datasheet.pdf) for more details
 
-use core::convert::TryInto;
 use core::{convert::Infallible, ops::RangeInclusive};
 
 use fugit::HertzU32;
@@ -49,11 +48,18 @@ pub enum Error {
 }
 
 /// Blocking helper method to setup the XOSC without going through all the steps.
+///
+/// - `frequency` must be between 1MHz and 15MHz
+/// - `stable_delay_millis` must be in the range `1..=1000` milliseconds and defines
+/// the time to wait before the crystal reaches a stable and high enough amplitude to be usable.
+///
+/// See datasheet Chapter 2 Section 16
 pub fn setup_xosc_blocking(
     xosc_dev: XOSC,
     frequency: HertzU32,
+    stable_delay_millis: u32,
 ) -> Result<CrystalOscillator<Stable>, Error> {
-    let initialized_xosc = CrystalOscillator::new(xosc_dev).initialize(frequency)?;
+    let initialized_xosc = CrystalOscillator::new(xosc_dev).initialize(frequency, stable_delay_millis)?;
 
     let stable_xosc_token = nb::block!(initialized_xosc.await_stabilization()).unwrap();
 
@@ -91,12 +97,15 @@ impl CrystalOscillator<Disabled> {
     }
 
     /// Initializes the XOSC : frequency range is set, startup delay is calculated and set.
-    pub fn initialize(self, frequency: HertzU32) -> Result<CrystalOscillator<Initialized>, Error> {
+    ///
+    /// - `frequency` must be between 1MHz and 15MHz
+    /// - `stable_delay_millis` must be in the range `1..=1000` milliseconds and defines
+    /// the time to wait before the crystal reaches a stable and high enough amplitude to be usable.
+    ///
+    /// See datasheet Chapter 2 Section 16
+    pub fn initialize(self, frequency: HertzU32, stable_delay_millis: u32) -> Result<CrystalOscillator<Initialized>, Error> {
         const ALLOWED_FREQUENCY_RANGE: RangeInclusive<HertzU32> =
             HertzU32::MHz(1)..=HertzU32::MHz(15);
-        //1 ms = 10e-3 sec and Freq = 1/T where T is in seconds so 1ms converts to 1000Hz
-        const STABLE_DELAY_AS_HZ: HertzU32 = HertzU32::Hz(1000);
-        const DIVIDER: u32 = 256;
 
         if !ALLOWED_FREQUENCY_RANGE.contains(&frequency) {
             return Err(Error::FrequencyOutOfRange);
@@ -107,14 +116,27 @@ impl CrystalOscillator<Disabled> {
             w
         });
 
-        //startup_delay = ((freq_hz * STABLE_DELAY) / 256) = ((freq_hz / delay_to_hz) / 256)
-        //              = freq_hz / (delay_to_hz * 256)
-        //See Chapter 2, Section 16, §3)
-        //We do the calculation first.
-        let startup_delay = frequency.to_Hz() / (STABLE_DELAY_AS_HZ.to_Hz() * DIVIDER);
+        // See Chapter 2, Section 16, §3)
+        // startup_delay = (freq_hz * STABLE_DELAY) / 256
+        //               = (freq_hz * (delay_in_millis / 1000)) / 256
+        //               = (freq_hz * delay_in_millis) / (1000 * 256)
+        //               = (freq_khz * delay_in_millis) / 256
+        // We do the calculation first.
+        match stable_delay_millis {
+            0 => return Err(Error::BadArgument),
+            1..=1000 => (),
+            _ => return Err(Error::BadArgument),
+        }
+        // Convert to kHZ first so that 15_000 * 1_000 is the max numerator, thus we can't overflow u32
+        let startup_delay = (frequency.to_kHz() * stable_delay_millis) / 256;
 
-        //Then we check if it fits into an u16.
-        let startup_delay: u16 = startup_delay.try_into().map_err(|_| Error::BadArgument)?;
+        // We already checked freq is 1Mhz..=15Mhz and millis is between 1 and 1000.
+        // The maximum value possible for the above calculation is then,
+        //
+        // (15_000 * 1000) / 256 = 58593
+        //
+        // which is within the bounds of a u16, so no check is necessary.
+        let startup_delay = startup_delay as u16;
 
         self.device.startup.write(|w| unsafe {
             w.delay().bits(startup_delay);

@@ -318,8 +318,14 @@ pub enum InitError {
 }
 
 /// Initialize the clocks and plls according to the reference implementation
+///
+/// - `xosc_crystal_freq` is in Hz
+/// - `xosc_stable_delay_millis` must be in the range `1..=1000` milliseconds and defines
+/// the time to wait before the crystal reaches a stable and high enough amplitude to be usable.
+/// See datasheet Chapter 2 Section 16.
 pub fn init_clocks_and_plls(
     xosc_crystal_freq: u32,
+    xosc_stable_delay_millis: u32,
     xosc_dev: XOSC,
     clocks_dev: CLOCKS,
     pll_sys_dev: PLL_SYS,
@@ -327,7 +333,7 @@ pub fn init_clocks_and_plls(
     resets: &mut RESETS,
     watchdog: &mut Watchdog,
 ) -> Result<ClocksManager, InitError> {
-    let xosc = setup_xosc_blocking(xosc_dev, xosc_crystal_freq.Hz()).map_err(InitError::XoscErr)?;
+    let xosc = setup_xosc_blocking(xosc_dev, xosc_crystal_freq.Hz(), xosc_stable_delay_millis).map_err(InitError::XoscErr)?;
 
     // Configure watchdog tick generation to tick over every microsecond
     watchdog.enable_tick_generation((xosc_crystal_freq / 1_000_000) as u8);
